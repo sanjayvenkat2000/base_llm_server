@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Chat Test</title>
+    <style>
+        #chat-container {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        #chat-messages {
+            height: 400px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 5px;
+        }
+
+        .user-message {
+            background-color: #e1f5fe;
+            text-align: right;
+        }
+
+        .assistant-message {
+            background-color: #f5f5f5;
+        }
+
+        #message-form {
+            display: flex;
+        }
+
+        #message-input {
+            flex-grow: 1;
+            padding: 8px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="chat-container">
+        <h1>Protected Chat</h1>
+        <a href="/logout">Logout</a>
+
+        <div id="chat-messages"></div>
+
+        <form id="message-form">
+            <input type="text" id="message-input" placeholder="Type your message here" required>
+            <button type="submit">Send</button>
+        </form>
+    </div>
+
+    <script>
+        const messagesContainer = document.getElementById('chat-messages');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+
+        // Handle form submission
+        messageForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const userMessage = messageInput.value.trim();
+            if (!userMessage) return;
+
+            // Display user message
+            appendMessage('user', userMessage);
+
+            // Prepare assistant message container
+            const assistantMessage = document.createElement('div');
+            assistantMessage.className = 'message assistant-message';
+            assistantMessage.textContent = '';
+            messagesContainer.appendChild(assistantMessage);
+
+            // Clear input
+            messageInput.value = '';
+
+            // Create chat message for API
+            const messageData = [
+                { role: 'user', content: userMessage }
+            ];
+
+            try {
+                // Make a fetch request but prepare to handle SSE response
+                const response = await fetch('/protected/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(messageData)
+                });
+
+                if (!response.ok) throw new Error('Network response was not ok');
+
+                // Get the response as a ReadableStream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                // Process the stream chunks
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    // Decode the chunk
+                    const chunk = decoder.decode(value, { stream: true });
+
+                    const lines = chunk.split('\n\n');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+
+                                if (data.content === '[DONE]') {
+                                    // Stream complete
+                                } else if (data.error) {
+                                    assistantMessage.textContent += `Error: ${data.error}`;
+                                } else {
+                                    assistantMessage.textContent += data.content;
+                                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                }
+                            } catch (e) {
+                                // Skip parsing errors
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                assistantMessage.textContent = `Error: ${error.message}`;
+            }
+        });
+
+        function appendMessage(role, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}-message`;
+            messageDiv.textContent = content;
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+    </script>
+</body>
+
+</html>
