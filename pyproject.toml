@@ -13,6 +13,8 @@ itsdangerous = "^2.2.0"
 httpx = "^0.28.1"
 uvicorn = "^0.34.0"
 dotenv = "^0.9.9"
+pyjwt = "^2.10.1"
+requests = "^2.32.3"
 
 
 [build-system]

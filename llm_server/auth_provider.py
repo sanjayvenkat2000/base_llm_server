@@ -1,112 +1,63 @@
-# auth_providers.py
 import os
-from enum import Enum
-from typing import Optional
+from typing import Annotated
 
-from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import Request
+import jwt
+import requests
+from dotenv import load_dotenv
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 
-# from starlette.config import Config
-from starlette.responses import HTMLResponse, RedirectResponse
-
-# config = Config(".env")
-oauth = OAuth()
+load_dotenv()
 
 
-class AuthProviderEnum(str, Enum):
-    GOOGLE = "google"
-    GITHUB = "github"
-    TWITTER = "twitter"
+# Clerk configuration
+CLERK_SECRET_KEY = os.environ.get("CLERK_SECRET_KEY", None)
+if CLERK_SECRET_KEY is None:
+    raise Exception("Need to set clerk secret key")
+
+CLERK_API_URL = "https://api.clerk.com/v1"
+CLERK_JWKS_URL = "https://api.clerk.dev/v1/jwks"  # URL to fetch Clerk's public keys
+
+# OAuth2 scheme to extract the token from the Authorization header
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")  # "token" is a dummy value here
 
 
-class AuthProvider:
-    def __init__(
-        self,
-        name,
-        client_id,
-        client_secret,
-        authorize_url,
-        access_token_url,
-        api_base_url,
-        client_kwargs,
-        jwks_uri=None,
-        request_token_url=None,
-    ):
-        self.name = name
-        oauth.register(
-            name=name,
-            client_id=client_id,
-            client_secret=client_secret,
-            access_token_url=access_token_url,
-            authorize_url=authorize_url,
-            api_base_url=api_base_url,
-            client_kwargs=client_kwargs,
-            jwks_uri=jwks_uri,
-            request_token_url=request_token_url,
+# Dependency to verify JWT and return user data
+async def verify_clerk_token(token: Annotated[str, Depends(oauth2_scheme)]):
+    try:
+        # For development/testing, you can bypass verification with a simple decode
+        # In production, you should verify with the proper JWKS approach
+        payload = jwt.decode(token, options={"verify_signature": False})
+
+        # TODO: For production, implement proper JWKS verification:
+        # 1. Fetch JWKS from https://api.clerk.dev/v1/jwks
+        # 2. Find the right key using the 'kid' from the token header
+        # 3. Verify with the public key
+
+        user_id = payload.get("sub")  # 'sub' contains the user ID in Clerk's JWT
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: No user ID found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return {"user_id": user_id, "payload": payload}
+    except Exception as e:
+        print(f"Error decoding token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        self.oauth_client = getattr(oauth, name)
-
-    async def login(self, request: Request):
-        provider_name = self.name.value if hasattr(self.name, "value") else self.name
-        redirect_uri = str(request.url_for("auth_callback", provider=provider_name))
-        return await self.oauth_client.authorize_redirect(request, redirect_uri)
-
-    async def auth(self, request: Request):
-        try:
-            token = await self.oauth_client.authorize_access_token(request)
-        except OAuthError as error:
-            return HTMLResponse(f"<h1>{error.error}</h1>")
-        user = token.get("userinfo") or token.get("user")
-        if user:
-            request.session["user"] = dict(user)
-            redirect_url = request.session.pop("redirect_after_login", "/")
-            return RedirectResponse(url=redirect_url)
-        return RedirectResponse(url="/")
 
 
-google_provider = AuthProvider(
-    name=AuthProviderEnum.GOOGLE,
-    client_id=os.environ.get("SOCIAL_AUTH_GOOGLE_CLIENT_ID"),
-    client_secret=os.environ.get("SOCIAL_AUTH_GOOGLE_CLIENT_SECRET"),
-    access_token_url="https://oauth2.googleapis.com/token",
-    authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-    api_base_url="https://www.googleapis.com/",
-    client_kwargs={"scope": "openid email profile"},
-    jwks_uri="https://www.googleapis.com/oauth2/v3/certs",
-)
+# Optional: Fetch additional user data from Clerk API
+async def get_current_user(token_data: Annotated[dict, Depends(verify_clerk_token)]):
+    user_id = token_data["user_id"]
+    # You could fetch more user info from Clerk if needed
 
-github_provider = AuthProvider(
-    name=AuthProviderEnum.GITHUB,
-    client_id=os.environ.get("SOCIAL_AUTH_GITHUB_CLIENT_ID"),
-    client_secret=os.environ.get("SOCIAL_AUTH_GITHUB_CLIENT_SECRET"),
-    access_token_url="https://github.com/login/oauth/access_token",
-    authorize_url="https://github.com/login/oauth/authorize",
-    api_base_url="https://api.github.com/",
-    client_kwargs={"scope": "user:email"},
-)
-
-twitter_provider = AuthProvider(
-    name=AuthProviderEnum.TWITTER,
-    client_id=os.environ.get("SOCIAL_AUTH_TWITTER_CLIENT_ID"),
-    client_secret=os.environ.get("SOCIAL_AUTH_TWITTER_CLIENT_SECRET"),
-    request_token_url="https://api.twitter.com/oauth/request_token",
-    access_token_url="https://api.twitter.com/oauth/access_token",
-    authorize_url="https://api.twitter.com/oauth/authorize",
-    api_base_url="https://api.twitter.com/1.1/",
-    client_kwargs={"scope": "users.read tweets.read"},
-)
-
-
-def get_auth_provider(provider_name: str) -> Optional[AuthProvider]:
-    if provider_name == AuthProviderEnum.GOOGLE:
-        return google_provider
-    elif provider_name == AuthProviderEnum.GITHUB:
-        return github_provider
-    elif provider_name == AuthProviderEnum.TWITTER:
-        return twitter_provider
-    else:
-        return None
-
-
-def auth_provider_callback(request: Request, provider: str):
-    return f"/auth/{provider}"
+    headers = {"Authorization": f"Bearer {CLERK_SECRET_KEY}"}
+    response = requests.get(f"{CLERK_API_URL}/users/{user_id}", headers=headers)
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to fetch user data")
+    return response.json()
