@@ -36,7 +36,7 @@ async def protected_endpoint(token_data: Annotated[dict, Depends(verify_clerk_to
 # Protected route with user data
 @app.get("/user")
 async def user_endpoint(current_user: Annotated[dict, Depends(get_current_user)]):
-    return {"message": f"User ID: {current_user['id']}"}
+    return current_user
 
 
 # Another protected route example

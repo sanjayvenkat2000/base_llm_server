@@ -3,6 +3,7 @@ from typing import Annotated
 
 import jwt
 import requests
+from async_lru import alru_cache
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -51,13 +52,18 @@ async def verify_clerk_token(token: Annotated[str, Depends(oauth2_scheme)]):
         )
 
 
-# Optional: Fetch additional user data from Clerk API
-async def get_current_user(token_data: Annotated[dict, Depends(verify_clerk_token)]):
-    user_id = token_data["user_id"]
-    # You could fetch more user info from Clerk if needed
-
+@alru_cache(maxsize=100)
+async def get_user_details(user_id: str):
+    print(f"Fetching user details for {user_id}")
     headers = {"Authorization": f"Bearer {CLERK_SECRET_KEY}"}
     response = requests.get(f"{CLERK_API_URL}/users/{user_id}", headers=headers)
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail="Failed to fetch user data")
     return response.json()
+
+
+# Optional: Fetch additional user data from Clerk API
+async def get_current_user(token_data: Annotated[dict, Depends(verify_clerk_token)]):
+    user_id = token_data["user_id"]
+    # You could fetch more user info from Clerk if needed
+    return await get_user_details(user_id)
